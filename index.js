@@ -12,29 +12,62 @@ class TeeStream extends Transform {
 		for (let stream of streams) {
 			this._streams.push(stream)
 			this._hookEvents(stream)
-		}		
+		}
 	}
 
 	_transform(chunk, enc, callback) {
-		this._writeAll(this._streams, 0, true, chunk, enc, callback)
-	}
+		if (this._progressState !== undefined) {
+			throw new Error('write in progress')
+		}
 
-	_writeAll(streams, index, shouldContinue, chunk, enc, callback) {
-		if (index === streams.length) {
+		if (this._streams.length === 0) {
 			return callback(null, chunk)
 		}
 
-		let streamShouldContinue = streams[index].write(chunk, enc, (err) => {
+		this._progressState = new ProgressState(chunk, enc, callback)
+
+		for (let stream of this._streams) {
+			this._writeOne(stream)
+		}
+	}
+
+	_writeOne(stream) {
+		let { chunk, enc } = this._progressState
+		let shouldContinue = stream.write(chunk, enc, err => {
 			if (err) {
-				return callback(err)
-			}
-			
-			if (!streamShouldContinue) {
-				shouldContinue = false
+				return this._progressState.callback(err)
 			}
 
-			this._writeAll(streams, ++index, shouldContinue, chunk, enc, callback)
+			if (!shouldContinue) {
+				this._progressState.chockedStreams.push(stream)
+			} 
+
+			if (++this._progressState.progress === this._streams.length) {
+				this._onWriteAllFinished()
+			}
 		})
+	}
+
+	_onWriteAllFinished() {
+		if (this._progressState.chockedStreams.length === 0) {
+			return this._writeDone()
+		}
+
+		for (let chockedStream of this._progressState.chockedStreams) {
+			chockedStream.on('drain', () => this._onDrain())
+		}
+	}
+
+	_onDrain() {
+		if (++this._progressState.drainProgress === this._progressState.chockedStreams.length) {
+			this._writeDone()
+		}
+	}
+
+	_writeDone() {
+		let { chunk, callback } = this._progressState
+		this._progressState = undefined
+		return callback(null, chunk)
 	}
 
 	_hookEvents(stream) {
@@ -44,7 +77,7 @@ class TeeStream extends Transform {
 		}
 	}
 
-	_isDestroyableStream(stream){
+	_isDestroyableStream(stream) {
 		return isFunction(stream.destroy)
 	}
 
@@ -61,7 +94,15 @@ class TeeStream extends Transform {
 	}
 }
 
-const { Writable} = require('stream')
+class ProgressState {
+	constructor(chunk, enc, callback) {
+		this.chunk = chunk
+		this.enc = enc
+		this.callback = callback
+		this.progress = 0
+		this.drainProgress = 0
+		this.chockedStreams = []
+	}
+}
 
 module.exports = TeeStream
-

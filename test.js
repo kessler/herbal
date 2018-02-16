@@ -46,6 +46,16 @@ describe('TeeStream', () => {
 	})
 
 	it('is readable', done => {
+		tee.add(i1, i2)
+		let i3 = new AWritable()
+		pump(source, tee, i3, err => {
+			if (err) return done(err)
+			expect(i3.results).to.deep.equal(expectedResult)
+			done()
+		})
+	})
+
+	it('is readable when no streams are added', done => {
 		let i3 = new AWritable()
 		pump(source, tee, i3, err => {
 			if (err) return done(err)
@@ -80,6 +90,22 @@ describe('TeeStream', () => {
 		done()
 	})
 
+	it('very large input', function(done) {
+		this.timeout(10000)
+
+		let i3 = new AWritable()
+		i2 = new ChockingWritable()
+		tee.add(i2)
+
+		source = new Generator(1000)
+
+		pump(source, tee, i3, err => {
+			if (err) return done(err)
+			expect(i3.results).to.have.length(1000)
+			done()
+		})
+	})
+
 	beforeEach(() => {
 		expectedResult = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'].reverse()
 		source = new Generator()
@@ -98,6 +124,27 @@ describe('TeeStream', () => {
 		_write(chunk, enc, callback) {
 			this.results.push(chunk.toString())
 			setTimeout(callback, this.delay)
+		}
+	}
+
+	class ChockingWritable extends AWritable {
+		constructor(delay = 0, options) {
+			super(options)
+			this.results = []
+			this.delay = delay
+			this._first = true
+		}
+
+		write(data, enc, cb) {
+			if (this._first) {
+				this._first = false
+				this.results.push(data.toString())
+				setImmediate(cb)
+				setTimeout(() => this.emit('drain'), 100)
+				return false
+			}
+
+			return super.write(data, cb)
 		}
 	}
 
